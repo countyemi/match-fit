@@ -11,6 +11,11 @@ import {
 function demoSearchUrl(name) {
   return `https://www.youtube.com/results?search_query=${encodeURIComponent(name + " exercise proper form tutorial")}`;
 }
+const LOCAL_DEMOS = {
+  "Goblet Squat": "/videos/Goblet_Squat.mp4",
+  "Romanian Deadlift": "/videos/Romanian_Deadlift.mp4",
+  "Walking Lunge": "/videos/walking-lunge.mp4",
+};
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from "recharts";
@@ -145,6 +150,13 @@ const STYLE = `
 .tfa-ex-demo { flex-shrink:0; display:flex; align-items:center; gap:4px; color: var(--ink-dim); text-decoration:none; font-size: 10.5px; text-transform:uppercase; letter-spacing:.05em; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 6px 9px; white-space:nowrap; font-weight: 600; }
 .tfa-ex-demo:hover { color: var(--ink); border-color: var(--lime-dim); background: rgba(216,255,92,0.22); }
 .tfa-ex-demo:focus-visible { outline: 2px solid var(--lime-dim); outline-offset: 2px; }
+.tfa-video-backdrop { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; padding: 18px; background: rgba(12, 14, 8, .72); backdrop-filter: blur(5px); }
+.tfa-video-dialog { width: min(760px, 100%); background: var(--card-hi); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 14px; box-shadow: var(--shadow-lg); }
+.tfa-video-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 11px; }
+.tfa-video-dialog-title { font-size: 15px; font-weight: 700; color: var(--ink); }
+.tfa-video-close { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--cream); color: var(--ink-dim); cursor: pointer; }
+.tfa-video-close:hover { color: var(--ink); border-color: var(--ink-dim); }
+.tfa-video-player { display: block; width: 100%; max-height: 70vh; background: #111; border-radius: var(--radius-sm); }
 
 .tfa-deload { background: linear-gradient(135deg, rgba(216,255,92,0.22), rgba(216,255,92,0.08)); border: 1px solid var(--lime-dim); border-radius: var(--radius-md); padding: 12px 16px; font-size: 12.5px; color: var(--ink); margin-bottom: 16px; display:flex; gap:9px; align-items:flex-start; line-height: 1.5; font-weight: 500; }
 
@@ -1282,6 +1294,7 @@ function PlanView({ planOpenPhase, setPlanOpenPhase, logs, currentWeek, openSess
 }
 
 function SessionView({ sessionKey: key, logs, toggleExercise, setRpe, setNotes, completeSession, reopenSession, back }) {
+  const [activeDemo, setActiveDemo] = useState(null);
   const [wk, day] = key.split("-");
   const week = Number(wk.replace("W", ""));
   const phase = phaseOfWeek(week);
@@ -1332,9 +1345,15 @@ function SessionView({ sessionKey: key, logs, toggleExercise, setRpe, setNotes, 
                   <div className="tfa-ex-cue">{exItem.cue}</div>
                 </div>
                 <div className="tfa-ex-sets tfa-mono">{exItem.sets} × {exItem.reps}</div>
-                <a className="tfa-ex-demo" href={demoSearchUrl(exItem.name)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                  <PlayCircle size={13} /> Demo
-                </a>
+                {LOCAL_DEMOS[exItem.name] ? (
+                  <button className="tfa-ex-demo" onClick={(e) => { e.stopPropagation(); setActiveDemo({ name: exItem.name, src: LOCAL_DEMOS[exItem.name] }); }}>
+                    <PlayCircle size={13} /> Demo
+                  </button>
+                ) : (
+                  <a className="tfa-ex-demo" href={demoSearchUrl(exItem.name)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                    <PlayCircle size={13} /> Demo
+                  </a>
+                )}
               </div>
             );
           })}
@@ -1360,6 +1379,18 @@ function SessionView({ sessionKey: key, logs, toggleExercise, setRpe, setNotes, 
           onChange={(e) => setNotes(key, e.target.value)}
         />
       </div>
+
+      {activeDemo && (
+        <div className="tfa-video-backdrop" role="presentation" onClick={() => setActiveDemo(null)}>
+          <div className="tfa-video-dialog" role="dialog" aria-modal="true" aria-labelledby="demo-title" onClick={(e) => e.stopPropagation()}>
+            <div className="tfa-video-dialog-head">
+              <div className="tfa-video-dialog-title" id="demo-title">{activeDemo.name} Demo</div>
+              <button className="tfa-video-close" aria-label="Close video" onClick={() => setActiveDemo(null)}><X size={16} /></button>
+            </div>
+            <video className="tfa-video-player" src={activeDemo.src} controls autoPlay playsInline />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
