@@ -12,6 +12,21 @@ function demoSearchUrl(name) {
   return `https://www.youtube.com/results?search_query=${encodeURIComponent(name + " exercise proper form tutorial")}`;
 }
 const LOCAL_DEMOS = {
+  "Dead Bug": "/videos/dead-bug.mp4",
+  "Weighted Dead Bug": "/videos/dead-bug.mp4",
+  "Box Jump (low box)": "/videos/box-jump.mp4",
+  "Box Jump (higher box)": "/videos/box-jump.mp4",
+  "Hip Thrust": "/videos/hip-thrust.mp4",
+  "Med Ball Scoop Toss": "/videos/med-ball-toss.mp4",
+  "Pallof Press": "/videos/pallof-press.mp4",
+  "Pallof Press (heavier)": "/videos/pallof-press.mp4",
+  "Weighted Pallof Press": "/videos/pallof-press.mp4",
+  "Band Lateral Walk": "/videos/band-lateral-walk.mp4",
+  "Glute Bridge": "/videos/glute-bridge.mp4",
+  "Ladder – Linear Run": "/videos/ladder-linear-run.mp4",
+  "Leg Swings & Hip Circles": "/videos/leg-swings-hip-circles.mp4",
+  "Bulgarian Split Squat": "/videos/bulgarian-split-squat.mp4",
+  "Bulgarian Split Squat (loaded)": "/videos/bulgarian-split-squat.mp4",
   "Goblet Squat": "/videos/Goblet_Squat.mp4",
   "Romanian Deadlift": "/videos/Romanian_Deadlift.mp4",
   "Walking Lunge": "/videos/walking-lunge.mp4",
@@ -488,6 +503,87 @@ const DELOAD_WEEKS = new Set([4, 8, 12, 16, 20, 24]);
 
 const ex = (name, sets, reps, pattern, cue) => ({ name, sets, reps, pattern, cue });
 
+const DEFAULT_PROFILE = {
+  age: "",
+  availability: "3",
+  sessionMinutes: "120",
+  priority: "agility",
+  experience: "intermediate",
+};
+const USERNAMES_KEY = "match-fit-usernames";
+const ACTIVE_USER_KEY = "match-fit-active-user";
+
+function normalizeUsername(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function getUsernameList() {
+  try {
+    const raw = window.localStorage.getItem(USERNAMES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function setUsernameList(list) {
+  window.localStorage.setItem(USERNAMES_KEY, JSON.stringify(list));
+}
+
+function currentUserKey(username) {
+  return `match-fit-user-${normalizeUsername(username)}`;
+}
+
+function readUserState(username) {
+  try {
+    const raw = window.localStorage.getItem(currentUserKey(username));
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function writeUserState(username, value) {
+  const key = currentUserKey(username);
+  window.localStorage.setItem(key, JSON.stringify(value));
+}
+
+function readLegacyProgramState() {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function adjustSets(value, amount) {
+  const sets = Number(value);
+  return Number.isFinite(sets) ? String(Math.max(1, sets + amount)) : value;
+}
+
+function personalisedBlocks(phase, day, profile) {
+  const source = TEMPLATES[phase][day];
+  if (!profile) return source;
+
+  const shortSession = Number(profile.sessionMinutes) <= 60;
+  const priority = profile.priority;
+  return source
+    .filter((block) => !(shortSession && ["Conditioning Finisher", "Cooldown"].some((name) => block.label.startsWith(name))))
+    .map((block) => ({
+      ...block,
+      exercises: block.exercises.map((exercise) => {
+        const targetsPriority =
+          (priority === "forehand" && day === "C" && ["throw", "rotate", "hinge"].includes(exercise.pattern)) ||
+          (priority === "backhand" && day === "B" && ["pull", "rotate"].includes(exercise.pattern)) ||
+          (priority === "serve" && day === "B" && ["push", "throw", "rotate"].includes(exercise.pattern)) ||
+          (priority === "agility" && block.label.startsWith("Reactive")) ||
+          (priority === "endurance" && ["Reactive", "Conditioning"].some((label) => block.label.startsWith(label)));
+        return targetsPriority ? { ...exercise, sets: adjustSets(exercise.sets, 1) } : exercise;
+      }),
+    }));
+}
+
 // Day A = Lower Body Power + Strength + Core
 // Day B = Upper Body Power + Shoulder Care + Core
 // Day C = Full-Body Integration + Reactive Agility + Conditioning
@@ -520,8 +616,6 @@ const TEMPLATES = {
         ex("Pallof Press", "3", "12 /side", "core", "Resist the twist"),
       ]},
       { label: "Cooldown", time: "10 min", exercises: [
-        ex("Hip Flexor Stretch", "2", "30s /side", "stretch", "Tuck pelvis under"),
-        ex("Foam Roll Quads / IT Band", "1", "60s /side", "stretch", "Slow rolls, pause on tight spots"),
       ]},
     ],
     B: [
@@ -614,8 +708,6 @@ const TEMPLATES = {
         ex("Side Plank w/ Rotation", "3", "10 /side", "core", "Full reach through"),
       ]},
       { label: "Cooldown", time: "10 min", exercises: [
-        ex("Hip Flexor Stretch", "2", "30s /side", "stretch", "Deep breaths"),
-        ex("Foam Roll", "1", "60s /side", "stretch", "Quads, glutes, calves"),
       ]},
     ],
     B: [
@@ -826,12 +918,169 @@ async function writeProgramState(value) {
 }
 
 /* ============================================================
-   MAIN APP
+   LOGIN + PROFILE SETUP
    ============================================================ */
+function UsernameLogin({ onContinue }) {
+  const [username, setUsername] = useState("");
+  const [message, setMessage] = useState("");
+
+  const cleaned = normalizeUsername(username);
+  const claimed = getUsernameList();
+  const isExistingUser = !!cleaned && claimed.includes(cleaned);
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+
+    if (!cleaned) {
+      setMessage("Choose a username to continue.");
+      return;
+    }
+
+    if (isExistingUser) {
+      setMessage(`Welcome back, ${cleaned}. Loading your saved plan…`);
+      onContinue({ username: cleaned, isExisting: true });
+      return;
+    }
+
+    setMessage(`"${cleaned}" is available. Claim it and start your profile.`);
+    onContinue({ username: cleaned, isExisting: false });
+  };
+
+  return (
+    <div className="tfa">
+      <style>{STYLE}</style>
+      <div className="tfa-scroll">
+        <div className="tfa-header">
+          <div className="tfa-brand">
+            <div className="tfa-brand-mark"><Trophy size={18} color="#16220A" /></div>
+            <div>
+              <div className="tfa-title">Match Fit</div>
+              <div className="tfa-subtitle">Tennis performance</div>
+            </div>
+          </div>
+        </div>
+
+        <form className="tfa-card" onSubmit={handleSubmit}>
+          <div className="tfa-card-title"><ClipboardList size={14}/> Sign in with your username</div>
+          <div className="tfa-structure-intro">
+            New players can claim a username first. Returning players can log in with the same username to keep their progress connected to their account.
+          </div>
+
+          <label className="tfa-label" htmlFor="username-login">Username</label>
+          <input
+            id="username-login"
+            className="tfa-input"
+            type="text"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            placeholder="Enter your username"
+            autoComplete="off"
+          />
+
+          <button className="tfa-btn" type="submit" style={{ marginTop: 18 }}>
+            <Target size={16}/> {cleaned ? (isExistingUser ? "Sign in" : "Claim Username") : "Claim Username"}
+          </button>
+
+          {cleaned ? (
+            <div className="tfa-pace" style={{ marginTop: 14 }}>
+              {isExistingUser ? `Welcome back, ${cleaned}. Sign in to continue.` : `"${cleaned}" is available. Claim it to start your profile.`}
+            </div>
+          ) : message ? (
+            <div className="tfa-pace" style={{ marginTop: 14 }}>
+              {message}
+            </div>
+          ) : null}
+
+          <div style={{ marginTop: 14, fontSize: 12.5, color: "var(--ink-dim)" }}>
+            No password required while testing — your progress is linked to your username.
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function ProfileSetup({ onComplete }) {
+  const [form, setForm] = useState(DEFAULT_PROFILE);
+
+  const update = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+  const submit = (event) => {
+    event.preventDefault();
+    if (!form.age) return;
+    onComplete(form);
+  };
+
+  return (
+    <div className="tfa">
+      <style>{STYLE}</style>
+      <div className="tfa-scroll">
+        <div className="tfa-header">
+          <div className="tfa-brand">
+            <div className="tfa-brand-mark"><Trophy size={18} color="#16220A" /></div>
+            <div>
+              <div className="tfa-title">Match Fit</div>
+              <div className="tfa-subtitle">Build your starting plan</div>
+            </div>
+          </div>
+        </div>
+        <form className="tfa-card" onSubmit={submit}>
+          <div className="tfa-card-title"><ClipboardList size={14}/> Tell us about your training</div>
+          <div className="tfa-structure-intro">Your answers shape session length, exercise volume, and the tennis quality you want to improve first.</div>
+          <div className="tfa-row-2">
+            <div>
+              <label className="tfa-label" htmlFor="profile-age">Age</label>
+              <input id="profile-age" className="tfa-input" type="number" min="13" max="100" required placeholder="e.g. 32" value={form.age} onChange={(event) => update("age", event.target.value)} />
+            </div>
+            <div>
+              <label className="tfa-label" htmlFor="profile-experience">Experience</label>
+              <select id="profile-experience" className="tfa-input" value={form.experience} onChange={(event) => update("experience", event.target.value)}>
+                <option value="beginner">Beginner</option>
+                <option value="intermediate">Intermediate</option>
+                <option value="advanced">Advanced</option>
+              </select>
+            </div>
+          </div>
+          <div className="tfa-row-2" style={{ marginTop: 12 }}>
+            <div>
+              <label className="tfa-label" htmlFor="profile-days">Available days per week</label>
+              <select id="profile-days" className="tfa-input" value={form.availability} onChange={(event) => update("availability", event.target.value)}>
+                <option value="2">2 days</option>
+                <option value="3">3 days</option>
+                <option value="4">4 days</option>
+              </select>
+            </div>
+            <div>
+              <label className="tfa-label" htmlFor="profile-duration">Session duration</label>
+              <select id="profile-duration" className="tfa-input" value={form.sessionMinutes} onChange={(event) => update("sessionMinutes", event.target.value)}>
+                <option value="60">60 minutes</option>
+                <option value="90">90 minutes</option>
+                <option value="120">120 minutes</option>
+              </select>
+            </div>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <label className="tfa-label" htmlFor="profile-priority">What matters most right now?</label>
+            <select id="profile-priority" className="tfa-input" value={form.priority} onChange={(event) => update("priority", event.target.value)}>
+              <option value="forehand">Forehand strength</option>
+              <option value="backhand">Backhand strength</option>
+              <option value="serve">Serve power</option>
+              <option value="agility">Speed and agility</option>
+              <option value="endurance">Endurance</option>
+            </select>
+          </div>
+          <button className="tfa-btn" type="submit" style={{ marginTop: 18 }}><Target size={16}/> Build My Starting Plan</button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState(false);
+  const [username, setUsername] = useState("");
   const [startDate, setStartDate] = useState(null);
+  const [profile, setProfile] = useState(null);
   const [logs, setLogs] = useState({}); // { "W1-A": { done, checkedIds:[], rpe, notes, completedAt } }
   const [metrics, setMetrics] = useState([]); // [{date, weight}]
   const [view, setView] = useState("dashboard");
@@ -842,12 +1091,16 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const savedState = await readProgramState();
-        if (savedState) {
-          const data = JSON.parse(savedState);
-          setStartDate(data.startDate || null);
-          setLogs(data.logs || {});
-          setMetrics(data.metrics || []);
+        const activeUser = window.localStorage.getItem(ACTIVE_USER_KEY);
+        if (activeUser) {
+          const savedState = readUserState(activeUser);
+          if (savedState) {
+            setUsername(activeUser);
+            setStartDate(savedState.startDate || null);
+            setProfile(savedState.profile || (savedState.startDate ? DEFAULT_PROFILE : null));
+            setLogs(savedState.logs || {});
+            setMetrics(savedState.metrics || []);
+          }
         }
       } catch (e) {
         // no saved state yet
@@ -858,33 +1111,72 @@ export default function App() {
 
   const persist = useCallback(async (next) => {
     try {
-      await writeProgramState(JSON.stringify(next));
+      if (username) {
+        writeUserState(username, next);
+        window.localStorage.setItem(ACTIVE_USER_KEY, username);
+      } else {
+        await writeProgramState(JSON.stringify(next));
+      }
       setSaveError(false);
     } catch (e) {
       setSaveError(true);
     }
-  }, []);
+  }, [username]);
 
   const updateState = useCallback((patch) => {
-    setStartDate((prevStart) => {
-      const nextStart = "startDate" in patch ? patch.startDate : prevStart;
-      setLogs((prevLogs) => {
-        const nextLogs = "logs" in patch ? patch.logs : prevLogs;
-        setMetrics((prevMetrics) => {
-          const nextMetrics = "metrics" in patch ? patch.metrics : prevMetrics;
-          persist({ startDate: nextStart, logs: nextLogs, metrics: nextMetrics });
-          return nextMetrics;
-        });
-        return nextLogs;
-      });
-      return nextStart;
-    });
-  }, [persist]);
+    const nextStart = "startDate" in patch ? patch.startDate : startDate;
+    const nextLogs = "logs" in patch ? patch.logs : logs;
+    const nextMetrics = "metrics" in patch ? patch.metrics : metrics;
+    const nextProfile = "profile" in patch ? patch.profile : profile;
 
-  const beginProgram = () => {
+    setStartDate(nextStart);
+    setLogs(nextLogs);
+    setMetrics(nextMetrics);
+    setProfile(nextProfile);
+    persist({ startDate: nextStart, profile: nextProfile, logs: nextLogs, metrics: nextMetrics });
+  }, [persist, startDate, logs, metrics, profile]);
+
+  const beginProgram = (nextProfile) => {
     const today = new Date().toISOString().slice(0, 10);
-    updateState({ startDate: today });
+    updateState({ startDate: today, profile: nextProfile });
   };
+
+  const handleUsernameChoice = ({ username: nextUsername, isExisting }) => {
+    const cleaned = normalizeUsername(nextUsername);
+    const claimList = getUsernameList();
+
+    if (!claimList.includes(cleaned)) {
+      const updatedList = [...new Set([...claimList, cleaned])];
+      setUsernameList(updatedList);
+    }
+
+    const savedState = readUserState(cleaned) || readLegacyProgramState();
+    if (savedState && isExisting) {
+      setUsername(cleaned);
+      setStartDate(savedState.startDate || null);
+      setProfile(savedState.profile || (savedState.startDate ? DEFAULT_PROFILE : null));
+      setLogs(savedState.logs || {});
+      setMetrics(savedState.metrics || []);
+      return;
+    }
+
+    setUsername(cleaned);
+    setStartDate(null);
+    setProfile(null);
+    setLogs({});
+    setMetrics([]);
+    window.localStorage.setItem(ACTIVE_USER_KEY, cleaned);
+  };
+
+  const handleLogout = useCallback(() => {
+    window.localStorage.removeItem(ACTIVE_USER_KEY);
+    setUsername("");
+    setStartDate(null);
+    setProfile(null);
+    setLogs({});
+    setMetrics([]);
+    setView("dashboard");
+  }, []);
 
   const daysSinceStart = useMemo(() => {
     if (!startDate) return 0;
@@ -993,6 +1285,14 @@ export default function App() {
     );
   }
 
+  if (!username) {
+    return <UsernameLogin onContinue={handleUsernameChoice} />;
+  }
+
+  if (!profile) {
+    return <ProfileSetup onComplete={(nextProfile) => { updateState({ profile: nextProfile }); }} />;
+  }
+
   if (!startDate) {
     return (
       <div className="tfa">
@@ -1017,7 +1317,7 @@ export default function App() {
                 Foundation → Build → Peak. Muscle, fat loss, core strength, reaction speed, and
                 swing power — built around your gym schedule of 3× 2-hour sessions a week.
               </div>
-              <button className="tfa-btn" onClick={beginProgram}><Flame size={16}/> Start Program Today</button>
+              <button className="tfa-btn" onClick={() => beginProgram(profile)}><Flame size={16}/> Start Program Today</button>
             </div>
           </div>
           <div className="tfa-card">
@@ -1047,7 +1347,10 @@ export default function App() {
     <div className="tfa">
       <style>{STYLE}</style>
       <div className="tfa-scroll">
-        <Header onHome={() => { setActiveSession(null); setView("dashboard"); }} />
+        <Header
+          onHome={() => { setActiveSession(null); setView("dashboard"); }}
+          onLogout={handleLogout}
+        />
         <Scoreboard currentPhase={currentPhase} currentWeek={currentWeek} logs={logs} />
         <Nav view={view} setView={setView} />
 
@@ -1083,6 +1386,7 @@ export default function App() {
             setNotes={setNotes}
             completeSession={completeSession}
             reopenSession={reopenSession}
+            profile={profile}
             back={() => setView("plan")}
           />
         )}
@@ -1114,7 +1418,7 @@ export default function App() {
   );
 }
 
-function Header({ onHome }) {
+function Header({ onHome, onLogout }) {
   return (
     <header className="tfa-header">
       <button className="tfa-brand tfa-brand-button" onClick={onHome} aria-label="Go to Match Fit home">
@@ -1124,6 +1428,12 @@ function Header({ onHome }) {
           <div className="tfa-subtitle">6-Month Tennis Performance Program</div>
         </div>
       </button>
+
+      {onLogout && (
+        <button className="tfa-btn ghost" onClick={onLogout} style={{ padding: "8px 12px" }}>
+          Log out
+        </button>
+      )}
     </header>
   );
 }
@@ -1293,13 +1603,13 @@ function PlanView({ planOpenPhase, setPlanOpenPhase, logs, currentWeek, openSess
   );
 }
 
-function SessionView({ sessionKey: key, logs, toggleExercise, setRpe, setNotes, completeSession, reopenSession, back }) {
+function SessionView({ sessionKey: key, logs, toggleExercise, setRpe, setNotes, completeSession, reopenSession, profile, back }) {
   const [activeDemo, setActiveDemo] = useState(null);
   const [wk, day] = key.split("-");
   const week = Number(wk.replace("W", ""));
   const phase = phaseOfWeek(week);
   const deload = DELOAD_WEEKS.has(week);
-  const blocks = TEMPLATES[phase][day];
+  const blocks = personalisedBlocks(phase, day, profile);
   const log = logs[key] || { checkedIds: [], rpe: null, notes: "" };
   const totalEx = blocks.reduce((s, b) => s + b.exercises.length, 0);
   const checkedCount = log.checkedIds?.length || 0;
@@ -1322,6 +1632,12 @@ function SessionView({ sessionKey: key, logs, toggleExercise, setRpe, setNotes, 
         <div className="tfa-deload">
           <Info size={15} style={{ flexShrink: 0, marginTop: 1 }} />
           Deload week: cut the sets shown below by roughly 40%, skip the conditioning finisher, and prioritize full recovery between exercises.
+        </div>
+      )}
+
+      {profile && (
+        <div className="tfa-pace" style={{ marginBottom: 18 }}>
+          Personalised for {profile.priority === "forehand" ? "forehand strength" : profile.priority === "backhand" ? "backhand strength" : profile.priority === "serve" ? "serve power" : profile.priority === "agility" ? "speed and agility" : "endurance"}. Your {profile.sessionMinutes}-minute sessions across {profile.availability} training days use {profile.priority === "agility" ? "extra reactive work" : "extra priority-focused volume"}.
         </div>
       )}
 
