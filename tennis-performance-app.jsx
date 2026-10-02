@@ -510,51 +510,49 @@ const DEFAULT_PROFILE = {
   priority: "agility",
   experience: "intermediate",
 };
-const USERNAMES_KEY = "match-fit-usernames";
 const ACTIVE_USER_KEY = "match-fit-active-user";
+const LEGACY_USERNAMES_KEY = "match-fit-usernames";
 
 function normalizeUsername(value) {
   return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-function getUsernameList() {
+async function getUsernameList() {
+  const response = await fetch("/api/users");
+  if (!response.ok) throw new Error("Could not load usernames.");
+  const serverUsers = await response.json();
   try {
-    const raw = window.localStorage.getItem(USERNAMES_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch (error) {
-    return [];
+    const oldUsers = JSON.parse(window.localStorage.getItem(LEGACY_USERNAMES_KEY) || "[]");
+    return [...new Set([...serverUsers, ...oldUsers.map(normalizeUsername)])];
+  } catch {
+    return serverUsers;
   }
 }
 
-function setUsernameList(list) {
-  window.localStorage.setItem(USERNAMES_KEY, JSON.stringify(list));
-}
-
-function currentUserKey(username) {
-  return `match-fit-user-${normalizeUsername(username)}`;
-}
-
-function readUserState(username) {
+function readLegacyUserState(username) {
   try {
-    const raw = window.localStorage.getItem(currentUserKey(username));
+    const raw = window.localStorage.getItem(`match-fit-user-${normalizeUsername(username)}`);
     return raw ? JSON.parse(raw) : null;
-  } catch (error) {
+  } catch {
     return null;
   }
 }
 
-function writeUserState(username, value) {
-  const key = currentUserKey(username);
-  window.localStorage.setItem(key, JSON.stringify(value));
+async function readUserState(username) {
+  const response = await fetch(`/api/users/${encodeURIComponent(normalizeUsername(username))}`);
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error("Could not load saved progress.");
+  const saved = await response.json();
+  return saved.state || null;
 }
 
-function readLegacyProgramState() {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch (error) {
-    return null;
-  }
+async function writeUserState(username, value) {
+  const response = await fetch(`/api/users/${encodeURIComponent(normalizeUsername(username))}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(value),
+  });
+  if (!response.ok) throw new Error("Could not save progress.");
 }
 
 function adjustSets(value, amount) {
@@ -923,12 +921,21 @@ async function writeProgramState(value) {
 function UsernameLogin({ onContinue }) {
   const [username, setUsername] = useState("");
   const [message, setMessage] = useState("");
+  const [claimed, setClaimed] = useState([]);
+  const [loadingUsers, setLoadingUsers] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
 
   const cleaned = normalizeUsername(username);
-  const claimed = getUsernameList();
   const isExistingUser = !!cleaned && claimed.includes(cleaned);
 
-  const handleSubmit = (event) => {
+  useEffect(() => {
+    getUsernameList()
+      .then(setClaimed)
+      .catch(() => setMessage("Couldn't connect to app storage. Start the app server and try again."))
+      .finally(() => setLoadingUsers(false));
+  }, []);
+
+  const handleSubmit = async (event) => {
     event.preventDefault();
 
     if (!cleaned) {
@@ -936,14 +943,14 @@ function UsernameLogin({ onContinue }) {
       return;
     }
 
-    if (isExistingUser) {
-      setMessage(`Welcome back, ${cleaned}. Loading your saved plan…`);
-      onContinue({ username: cleaned, isExisting: true });
-      return;
+    setSubmitting(true);
+    setMessage(isExistingUser ? `Welcome back, ${cleaned}. Loading your saved plan…` : `Setting up ${cleaned}…`);
+    try {
+      await onContinue({ username: cleaned, isExisting: isExistingUser });
+    } catch {
+      setMessage("Couldn't load or save your account. Please try again.");
+      setSubmitting(false);
     }
-
-    setMessage(`"${cleaned}" is available. Claim it and start your profile.`);
-    onContinue({ username: cleaned, isExisting: false });
   };
 
   return (
@@ -977,17 +984,17 @@ function UsernameLogin({ onContinue }) {
             autoComplete="off"
           />
 
-          <button className="tfa-btn" type="submit" style={{ marginTop: 18 }}>
-            <Target size={16}/> {cleaned ? (isExistingUser ? "Sign in" : "Claim Username") : "Claim Username"}
+          <button className="tfa-btn" type="submit" disabled={loadingUsers || submitting} style={{ marginTop: 18 }}>
+            <Target size={16}/> {loadingUsers ? "Connecting…" : submitting ? "Loading…" : cleaned ? (isExistingUser ? "Sign in" : "Claim Username") : "Claim Username"}
           </button>
 
-          {cleaned ? (
-            <div className="tfa-pace" style={{ marginTop: 14 }}>
-              {isExistingUser ? `Welcome back, ${cleaned}. Sign in to continue.` : `"${cleaned}" is available. Claim it to start your profile.`}
-            </div>
-          ) : message ? (
+          {message ? (
             <div className="tfa-pace" style={{ marginTop: 14 }}>
               {message}
+            </div>
+          ) : cleaned ? (
+            <div className="tfa-pace" style={{ marginTop: 14 }}>
+              {isExistingUser ? `Welcome back, ${cleaned}. Sign in to continue.` : `"${cleaned}" is available. Claim it to start your profile.`}
             </div>
           ) : null}
 
@@ -1093,8 +1100,10 @@ export default function App() {
       try {
         const activeUser = window.localStorage.getItem(ACTIVE_USER_KEY);
         if (activeUser) {
-          const savedState = readUserState(activeUser);
+          const savedState = await readUserState(activeUser) || readLegacyUserState(activeUser);
           if (savedState) {
+            await writeUserState(activeUser, savedState);
+            window.localStorage.removeItem(`match-fit-user-${normalizeUsername(activeUser)}`);
             setUsername(activeUser);
             setStartDate(savedState.startDate || null);
             setProfile(savedState.profile || (savedState.startDate ? DEFAULT_PROFILE : null));
@@ -1112,7 +1121,7 @@ export default function App() {
   const persist = useCallback(async (next) => {
     try {
       if (username) {
-        writeUserState(username, next);
+        await writeUserState(username, next);
         window.localStorage.setItem(ACTIVE_USER_KEY, username);
       } else {
         await writeProgramState(JSON.stringify(next));
@@ -1141,30 +1150,18 @@ export default function App() {
     updateState({ startDate: today, profile: nextProfile });
   };
 
-  const handleUsernameChoice = ({ username: nextUsername, isExisting }) => {
+  const handleUsernameChoice = async ({ username: nextUsername, isExisting }) => {
     const cleaned = normalizeUsername(nextUsername);
-    const claimList = getUsernameList();
-
-    if (!claimList.includes(cleaned)) {
-      const updatedList = [...new Set([...claimList, cleaned])];
-      setUsernameList(updatedList);
-    }
-
-    const savedState = readUserState(cleaned) || readLegacyProgramState();
-    if (savedState && isExisting) {
-      setUsername(cleaned);
-      setStartDate(savedState.startDate || null);
-      setProfile(savedState.profile || (savedState.startDate ? DEFAULT_PROFILE : null));
-      setLogs(savedState.logs || {});
-      setMetrics(savedState.metrics || []);
-      return;
-    }
+    const savedState = await readUserState(cleaned) || readLegacyUserState(cleaned) || (isExisting ? readLegacyProgramState() : null);
+    const nextState = savedState || { startDate: null, profile: null, logs: {}, metrics: [] };
+    await writeUserState(cleaned, nextState);
+    window.localStorage.removeItem(`match-fit-user-${cleaned}`);
 
     setUsername(cleaned);
-    setStartDate(null);
-    setProfile(null);
-    setLogs({});
-    setMetrics([]);
+    setStartDate(nextState.startDate || null);
+    setProfile(nextState.profile || (nextState.startDate ? DEFAULT_PROFILE : null));
+    setLogs(nextState.logs || {});
+    setMetrics(nextState.metrics || []);
     window.localStorage.setItem(ACTIVE_USER_KEY, cleaned);
   };
 
